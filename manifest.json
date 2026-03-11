@@ -4,7 +4,7 @@
   "description": "AI-powered short video ordering platform",
   "start_url": "/clipgenai/",
   "scope": "/clipgenai/",
-  "display": "standalone",
+  "display": "fullscreen",
   "background_color": "#06060A",
   "theme_color": "#9D71FF",
   "orientation": "portrait-primary",

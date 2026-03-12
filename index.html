@@ -63,6 +63,7 @@ if('serviceWorker' in navigator){
 
   firebase.initializeApp(firebaseConfig);
   var db = firebase.firestore();
+  window._db = db; // expose for onSnapshot use
 
   // ── DB HELPER FUNCTIONS ──────────────────────────────────
   window.dbGet = async function(col, id) {
@@ -918,6 +919,8 @@ var S={
     var ldEl=document.getElementById('_fbLoad');
     if(ldEl)ldEl.remove();
     render();
+    // Start realtime chat if already logged in
+    if(S.user) startRealtimeChat();
   }
 };
 
@@ -985,8 +988,8 @@ function doLogin(opts){
   if(!u){u={id:uid(),name:opts.name,email:opts.email,password:opts.password,isAdmin:false,method:opts.method||'email',createdAt:new Date().toISOString()};users.push(u);S.users=users}
   sess(u);
 }
-function sess(u){S.user=u;S.isAdmin=u.isAdmin;localStorage.setItem('sas_ss',JSON.stringify({id:u.id}));toast('g','Welcome, '+u.name.split(' ')[0]);setTimeout(render,280)}
-function logout(){localStorage.removeItem('sas_ss');S.user=null;S.isAdmin=false;S.page='dash';toast('a','Signed out');setTimeout(render,200)}
+function sess(u){S.user=u;S.isAdmin=u.isAdmin;localStorage.setItem('sas_ss',JSON.stringify({id:u.id}));toast('g','Welcome, '+u.name.split(' ')[0]);setTimeout(function(){render();startRealtimeChat();},280)}
+function logout(){stopRealtimeListeners();localStorage.removeItem('sas_ss');S.user=null;S.isAdmin=false;S.page='dash';toast('a','Signed out');setTimeout(render,200)}
 
 // -- USER LAYOUT -------------------------------------------
 function rLayout(){
@@ -1728,22 +1731,10 @@ function chatKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg(
 function sendMsg(){
   var inp=$('chatInp');if(!inp)return;
   var text=inp.value.trim();if(!text)return;
-  var msgs=S.msgs;
-  msgs.push({
-    id:uid(),
-    userId:S.user.id,
-    toId:'_adm',
-    userName:S.user.name,
-    text:text,
-    createdAt:new Date().toISOString(),
-    status:'sent',
-    readAt:null
-  });
-  S.msgs=msgs;
-  
+  var msg={id:uid(),userId:S.user.id,toId:'_adm',userName:S.user.name,text:text,createdAt:new Date().toISOString(),status:'sent',readAt:null};
+  window.DB._cache.msgs.push(msg);
+  window.dbSet('msgs',msg.id,msg);
   inp.value='';
-  var pg=$('pg-chat');if(pg){pg.innerHTML=rChat();bindChat();}
-  toast('g','Message sent','Support team will reply soon');
 }
 function bindChat(){
   var inp=$('chatInp');
@@ -1836,23 +1827,10 @@ function sendChatMessage(){
   var text=inp.value.trim();
   if(!text)return;
   
-  var msgs=S.msgs;
-  msgs.push({
-    id:uid(),
-    userId:S.user.id,
-    toId:'_adm',
-    userName:S.user.name,
-    text:text,
-    createdAt:new Date().toISOString(),
-    status:'sent',
-    readAt:null
-  });
-  S.msgs=msgs;
-  
-  
+  var msg={id:uid(),userId:S.user.id,toId:'_adm',userName:S.user.name,text:text,createdAt:new Date().toISOString(),status:'sent',readAt:null};
+  window.DB._cache.msgs.push(msg);
+  window.dbSet('msgs',msg.id,msg);
   inp.value='';
-  updateFloatingChat();
-  toast('g','Message sent','Support team will reply soon');
 }
 
 // Handle Enter key in floating chat input
@@ -1914,6 +1892,7 @@ function showDelMsg(e,msgId){
 }
 
 function delMsg(msgId){
+  window.dbDel('msgs',msgId);
   S.msgs=S.msgs.filter(function(m){return m.id!==msgId});
   var pg=$('pg-chat');
   if(pg&&pg.classList.contains('on')){
@@ -2034,21 +2013,10 @@ function adminSendMsg(){
   var inp=$('adminChatInp');if(!inp)return;
   var text=inp.value.trim();if(!text)return;
   if(!window._chatSel){toast('r','Select a user first');return}
-  var msgs=S.msgs;
-  msgs.push({
-    id:uid(),
-    userId:'_adm',
-    toId:window._chatSel,
-    userName:'Support Team',
-    text:text,
-    createdAt:new Date().toISOString(),
-    status:'sent',
-    readAt:null
-  });
-  S.msgs=msgs;
-  
+  var msg={id:uid(),userId:'_adm',toId:window._chatSel,userName:'Support Team',text:text,createdAt:new Date().toISOString(),status:'sent',readAt:null};
+  window.DB._cache.msgs.push(msg);
+  window.dbSet('msgs',msg.id,msg);
   inp.value='';
-  swATab('chat');
   toast('g','Replied');
 }
 function adminChatKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();adminSendMsg();}}
@@ -3017,6 +2985,205 @@ function _rcRow(label,val){
 // -- BOOT --------------------------------------------------
 // S.init() is async — it loads Firebase data before rendering
 S.init();
+
+
+function stopRealtimeChat(){
+  if(window._chatUnsub){window._chatUnsub();window._chatUnsub=null;}
+}
+
+function bindAdminChat(){
+  var inp=$('adminChatInp');
+  if(inp){
+    inp.addEventListener('keydown',adminChatKey);
+    inp.addEventListener('input',function(){this.style.height='auto';this.style.height=Math.min(this.scrollHeight,100)+'px';});
+  }
+  var msgs=$('adminMsgs');
+  if(msgs)setTimeout(function(){msgs.scrollTop=msgs.scrollHeight},80);
+}
+
+function updateChatBadge(){
+  if(!S.user||S.isAdmin)return;
+  var unread=window.DB._cache.msgs.filter(function(m){
+    return m.userId==='_adm'&&m.toId===S.user.id&&m.status!=='viewed';
+  }).length;
+  var badge=$('chatBadge');
+  if(badge){badge.textContent=unread;badge.style.display=unread>0?'flex':'none';}
+}
+
+// ── SMART PAGE RE-RENDER ────────────────────────────────────
+// Re-renders only the currently visible page/tab without full app reload
+function smartUpdate(changedCol){
+  if(!S.user) return;
+
+  if(S.isAdmin){
+    // Admin: re-render current tab if relevant
+    var tabMap={
+      orders:['orders','overview','deliver'],
+      pays:['payments','overview'],
+      users:['users','overview'],
+      subs:['users','overview'],
+      vids:['deliver'],
+      anns:['ann'],
+      msgs:['chat'],
+      templates:['chat'],
+      cfg:['cfg','plans']
+    };
+    var relevantTabs = tabMap[changedCol]||[];
+    if(relevantTabs.indexOf(S.atab)>-1){
+      var ab=$('aBody');
+      if(ab){
+        var html=rAS2(S.atab);
+        ab.innerHTML=html;
+        if(S.atab==='chat') bindAdminChat();
+      }
+    }
+    // Always update overview stats
+    if(changedCol==='pays'||changedCol==='orders'||changedCol==='users'){
+      if(S.atab==='overview'){
+        var ab2=$('aBody');
+        if(ab2) ab2.innerHTML=rAOv();
+      }
+    }
+    return;
+  }
+
+  // User side: smart update per page
+  var pageMap={
+    orders:['dash','profile'],
+    subs:['dash','plans','profile'],
+    pays:['payments'],
+    vids:['vids','dash'],
+    anns:['dash'],
+    msgs:['chat'],
+    users:['profile','dash']
+  };
+  var relevantPages = pageMap[changedCol]||[];
+
+  relevantPages.forEach(function(p){
+    var pg=$('pg-'+p);
+    if(!pg) return;
+    if(p===S.page && pg.classList.contains('on')){
+      // Page is currently visible — re-render it
+      var oldScroll=window.scrollY;
+      pg.innerHTML=rPage(p);
+      bindPE(p);
+      if(p==='chat') bindChat();
+      window.scrollTo(0,oldScroll);
+    }
+  });
+
+  // Update header avatar if avatars changed
+  if(changedCol==='avatars'){
+    var av=$('btnAv');
+    if(av){
+      var url=S.getAvatar(S.user.id);
+      if(url){
+        av.style.backgroundImage='url(\''+url+'\')';
+        av.style.backgroundSize='cover';
+        av.style.backgroundPosition='center';
+        av.textContent='';
+      }
+    }
+  }
+
+  // Always refresh chat badge
+  updateChatBadge();
+
+  // Check new video popup
+  if(changedCol==='vids') checkNewVidPopup();
+
+  // Toast notification for key events (only for changes from others, not self)
+  if(changedCol==='pays'){
+    var myPays=S.pays.filter(function(p){return p.userId===S.user.id});
+    myPays.forEach(function(p){
+      var prev=window._prevPayStatus&&window._prevPayStatus[p.id];
+      if(prev&&prev!==p.status){
+        if(p.status==='approved') toast('g','🎉 Payment Approved!','Your '+p.planName+' plan is now active');
+        if(p.status==='rejected') toast('r','Payment Rejected','Please contact support');
+      }
+    });
+    // Save current statuses
+    window._prevPayStatus={};
+    myPays.forEach(function(p){window._prevPayStatus[p.id]=p.status;});
+  }
+  if(changedCol==='vids'){
+    var myVids=S.vids.filter(function(v){return v.userId===S.user.id});
+    var newCount=(window._prevVidCount||0);
+    if(myVids.length>newCount && newCount>0){
+      toast('g','🎬 New Video Ready!','Check your videos tab');
+    }
+    window._prevVidCount=myVids.length;
+  }
+  if(changedCol==='anns'){
+    var newAnnCount=S.anns.length;
+    if((window._prevAnnCount||0)>0 && newAnnCount>(window._prevAnnCount||0)){
+      toast('a','📢 New Announcement','Tap the bell to read');
+    }
+    window._prevAnnCount=newAnnCount;
+  }
+}
+
+// ── GLOBAL REAL-TIME LISTENERS ──────────────────────────────
+// One listener per collection — updates cache + triggers smart UI update
+var _unsubs=[];
+
+function startRealtimeListeners(){
+  // Stop any existing listeners
+  stopRealtimeListeners();
+
+  var cols=['orders','subs','pays','vids','anns','templates','users'];
+
+  cols.forEach(function(col){
+    var unsub=window._db.collection(col)
+      .onSnapshot(function(snap){
+        window.DB._cache[col]=snap.docs.map(function(d){return Object.assign({id:d.id},d.data());});
+        smartUpdate(col);
+      },function(err){console.error('Listener error ['+col+']:',err);});
+    _unsubs.push(unsub);
+  });
+
+  // Msgs with ordering
+  var msgUnsub=window._db.collection('msgs')
+    .orderBy('createdAt','asc')
+    .onSnapshot(function(snap){
+      window.DB._cache.msgs=snap.docs.map(function(d){return Object.assign({id:d.id},d.data());});
+      smartUpdate('msgs');
+      updateChatBadge();
+      // User chat page
+      if(S.user&&!S.isAdmin){
+        var pg=$('pg-chat');
+        if(pg&&pg.classList.contains('on')){pg.innerHTML=rChat();bindChat();}
+        var panel=$('chatPanel');
+        if(panel&&!panel.classList.contains('h')) updateFloatingChat();
+      }
+      // Admin chat tab
+      if(S.isAdmin&&S.atab==='chat'){
+        var ab=$('aBody');
+        if(ab){ab.innerHTML=rAChat();bindAdminChat();}
+      }
+    },function(err){console.error('Msgs listener error:',err);});
+  _unsubs.push(msgUnsub);
+
+  // Meta (avatars + cfg)
+  var metaUnsub=window._db.collection('meta')
+    .onSnapshot(function(snap){
+      snap.docs.forEach(function(d){
+        if(d.id==='avatars') window.DB._cache.avatars=(d.data()&&d.data().data)||{};
+        if(d.id==='cfg') window.DB._cache.cfg=d.data()||null;
+      });
+      smartUpdate('avatars');
+    },function(err){console.error('Meta listener error:',err);});
+  _unsubs.push(metaUnsub);
+}
+
+function stopRealtimeListeners(){
+  _unsubs.forEach(function(u){try{u();}catch(e){}});
+  _unsubs=[];
+  stopRealtimeChat();
+}
+
+// Alias for backwards compatibility
+function startRealtimeChat(){ startRealtimeListeners(); }
 </script>
 </body>
 </html>

@@ -58,6 +58,7 @@ if('serviceWorker' in navigator){
 </script>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
@@ -849,6 +850,58 @@ function uploadToCloudinary(file, onSuccess, onError, onProgress) {
 // -- STATE -------------------------------------------------
 var ADMIN_EMAIL='sharmatushya7@gmail.com';
 var ADMIN_PASS='A1S2D3F4';
+
+// ── EMAILJS CONFIG ────────────────────────────────────────
+// Setup: https://emailjs.com → Account → Public Key & Service/Template IDs
+var EMAILJS_PUBLIC_KEY   = 'zMBbxqSho8I0Nn0bf';
+var EMAILJS_SERVICE_ID   = 'clipgenai';
+var EMAILJS_TEMPLATE_ID  = 'template_clipgenai';
+var _emailjsReady = false;
+(function(){
+  if(typeof emailjs !== 'undefined'){
+    emailjs.init(EMAILJS_PUBLIC_KEY);
+    _emailjsReady = true;
+  } else {
+    window.addEventListener('load', function(){
+      if(typeof emailjs !== 'undefined'){ emailjs.init(EMAILJS_PUBLIC_KEY); _emailjsReady = true; }
+    });
+  }
+})();
+
+// ── SEND PAYMENT APPROVED EMAIL ───────────────────────────
+async function sendPaymentApprovedEmail(pay, plan) {
+  try {
+    // Get user email from Firestore
+    var userDoc = await window.dbGet('users', pay.userId);
+    if (!userDoc || !userDoc.email) { console.warn('EmailJS: no user email'); return; }
+
+    var dashLink = 'https://clipgenai.github.io/tushya/dashboard';
+    var date     = new Date(pay.createdAt).toLocaleDateString('en-IN', { day:'2-digit', month:'long', year:'numeric' });
+
+    var templateParams = {
+      to_email:     userDoc.email,
+      to_name:      pay.userName || userDoc.name || 'User',
+      plan_name:    (plan ? plan.name : pay.planName || '-') + ' Plan',
+      amount:       '₹' + Number(pay.amount || 0).toLocaleString('en-IN'),
+      txn_id:       pay.transactionId || '-',
+      utr_number:   pay.utrNumber || '-',
+      pay_date:     date,
+      dashboard_link: dashLink,
+      from_name:    'ClipGen AI',
+      reply_to:     'sharmatushya7@gmail.com'
+    };
+
+    if (!_emailjsReady) { console.warn('EmailJS not ready'); return; }
+    var resp = await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, templateParams);
+    console.log('EmailJS sent:', resp.status, resp.text);
+    toast('g', 'Email sent ✓', userDoc.email);
+  } catch(err) {
+    console.error('EmailJS error:', err);
+    // Don't block the UI — email failure is non-critical
+    toast('a', 'Email could not be sent', 'Payment still approved');
+  }
+}
+// ──────────────────────────────────────────────────────────
 
 // S is now Firebase-backed. Reads from in-memory cache, writes sync to Firestore.
 var S={
@@ -2650,7 +2703,10 @@ function appPay(id){
     subs.push({id:uid(),userId:p.userId,planId:plan.id,planName:plan.name,totalVideos:plan.videos,usedVideos:0,active:true,startDate:new Date().toISOString(),endDate:end.toISOString()});
     S.subs=subs;
   }
-  toast('g','Payment approved','Plan activated');swATab('payments');
+  // ── Send approval email notification ──────────────────────
+  sendPaymentApprovedEmail(p, plan);
+  // ─────────────────────────────────────────────────────────
+  toast('g','Payment approved','Plan activated — email sending…');swATab('payments');
 }
 function rejPay(id){if(!confirm('Reject this payment?'))return;var pays=S.pays,p=pays.find(function(p){return p.id===id});if(p)p.status='rejected';S.pays=pays;toast('a','Payment rejected');swATab('payments')}
 function delUser(id){

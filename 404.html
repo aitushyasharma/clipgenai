@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClipGen AI</title>
+<!--
+  GitHub Pages SPA Redirect — 404.html
+  ─────────────────────────────────────
+  GitHub Pages serves this file for every unknown path.
+  We encode the original path into the query string, then
+  index.html decodes it and restores the full URL via
+  history.replaceState so the SPA router can handle it.
+
+  Technique credit: https://github.com/rafgraph/spa-github-pages
+-->
+<script>
+  // How many path segments make up the base path?
+  // For https://clipgenai.github.io/tushya/ the value is 1.
+  var pathSegmentsToKeep = 1;
+
+  var l = window.location;
+  l.replace(
+    l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
+    l.pathname.split('/').slice(0, 1 + pathSegmentsToKeep).join('/') + '/?p=/' +
+    l.pathname.split('/').slice(1 + pathSegmentsToKeep).join('/').replace(/&/g, '~and~') +
+    (l.search ? '&q=' + l.search.slice(1).replace(/&/g, '~and~') : '') +
+    l.hash
+  );
+</script>
+</head>
+<body></body>
+</html>
